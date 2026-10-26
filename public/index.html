@@ -32,6 +32,14 @@
   #meter .pct{font-size:20px;font-weight:700;min-width:3.2ch;text-align:center}
   #meter .parts{font-size:11px;line-height:1.5;opacity:.85;text-align:left;min-width:9ch}
   #meter.noface .pct{opacity:.4}
+  button{white-space:nowrap}
+  @media (max-width:480px){
+    #bar{gap:4px;padding:6px;bottom:12px;max-width:calc(100vw - 16px)}
+    #bar button,#bar select{padding:7px 8px;font-size:13px}
+    #meter{right:8px;padding:8px 6px}
+    #meter .track{width:20px;height:min(38vh,300px)}
+    #meter .pct{font-size:16px}
+  }
 </style>
 </head>
 <body>
