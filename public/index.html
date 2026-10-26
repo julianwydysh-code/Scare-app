@@ -11,14 +11,16 @@
   #v,#overlay{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
   .unmirrored #v,.unmirrored #overlay{transform:none}
   #overlay{pointer-events:none}
-  #start{position:fixed;inset:0;display:grid;place-items:center;text-align:center;gap:12px}
+  #start{position:fixed;inset:0;display:grid;place-items:center;text-align:center}
   #start button{font-size:18px;padding:14px 28px}
   #bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);display:flex;gap:8px;padding:8px;
        background:rgba(0,0,0,.55);border-radius:12px;backdrop-filter:blur(8px);transition:opacity .4s}
   #bar.hide{opacity:0;pointer-events:none}
   button,select{background:#222;color:#eee;border:1px solid #444;border-radius:8px;padding:8px 12px;font:inherit;cursor:pointer}
   button:hover,select:hover{background:#333}
-  #msg{color:#f88;max-width:320px}
+  button[aria-pressed="true"]{background:#0a3;border-color:#2e6;color:#fff}
+  button:disabled{opacity:.6;cursor:wait}
+  #msg{color:#f88;max-width:320px;margin-top:12px}
   [hidden]{display:none!important}
 </style>
 </head>
@@ -35,59 +37,79 @@
 
 <div id="bar" hidden>
   <select id="cams" title="Camera"></select>
+  <button id="dots" aria-pressed="true" disabled>Face dots: loading…</button>
   <button id="flip">Flip</button>
   <button id="snap">Snapshot</button>
   <button id="fs">Fullscreen</button>
 </div>
 
 <script type="module">
-// ===================== MediaPipe goes here =====================
-// Docs: https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/web_js
-// Example (uncomment to use Face Landmarker):
-//
-// import { FilesetResolver, FaceLandmarker, DrawingUtils }
-//   from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/vision_bundle.mjs';
-// let landmarker, draw;
+import { FilesetResolver, FaceLandmarker }
+  from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/vision_bundle.mjs';
 
-async function setupVision() {
-  // const fileset = await FilesetResolver.forVisionTasks(
-  //   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wasm');
-  // landmarker = await FaceLandmarker.createFromOptions(fileset, {
-  //   baseOptions: {
-  //     modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-  //     delegate: 'GPU'
-  //   },
-  //   runningMode: 'VIDEO',
-  //   numFaces: 1
-  // });
-  // draw = new DrawingUtils(ctx);
-}
-
-// Called once per new video frame. ctx is cleared and sized to the video for you.
-function onFrame(video, ctx, now) {
-  // if (!landmarker) return;
-  // const res = landmarker.detectForVideo(video, now);
-  // for (const face of res.faceLandmarks) {
-  //   draw.drawLandmarks(face, { color: '#f00', radius: 1 });
-  // }
-}
-// ===============================================================
+const WASM  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wasm';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const DOT_COLOR = '#00ff66';
 
 const $ = id => document.getElementById(id);
-const v = $('v'), cams = $('cams'), bar = $('bar');
+const v = $('v'), cams = $('cams'), bar = $('bar'), dotsBtn = $('dots');
 const overlay = $('overlay'), ctx = overlay.getContext('2d');
-let stream, lastTime = -1;
+let stream, landmarker, showDots = true, lastTime = -1, started = false;
+
+// ---------- MediaPipe ----------
+async function setupVision() {
+  const fileset = await FilesetResolver.forVisionTasks(WASM);
+  const opts = delegate => ({
+    baseOptions: { modelAssetPath: MODEL, delegate },
+    runningMode: 'VIDEO',
+    numFaces: 2
+  });
+  try {
+    landmarker = await FaceLandmarker.createFromOptions(fileset, opts('GPU'));
+  } catch {
+    landmarker = await FaceLandmarker.createFromOptions(fileset, opts('CPU'));
+  }
+}
+
+function drawDots(faces) {
+  const w = overlay.width, h = overlay.height, r = Math.max(1.5, w / 700);
+  ctx.fillStyle = DOT_COLOR;
+  ctx.beginPath();
+  for (const face of faces) {
+    for (const p of face) {
+      ctx.moveTo(p.x * w + r, p.y * h);
+      ctx.arc(p.x * w, p.y * h, r, 0, Math.PI * 2);
+    }
+  }
+  ctx.fill();
+}
+
+function onFrame(now) {
+  if (!showDots || !landmarker) return;
+  const res = landmarker.detectForVideo(v, now);
+  drawDots(res.faceLandmarks);
+}
 
 function loop(now) {
   if (v.readyState >= 2 && v.currentTime !== lastTime) {
     lastTime = v.currentTime;
-    if (overlay.width !== v.videoWidth) { overlay.width = v.videoWidth; overlay.height = v.videoHeight; }
+    if (overlay.width !== v.videoWidth || overlay.height !== v.videoHeight) {
+      overlay.width = v.videoWidth; overlay.height = v.videoHeight;
+    }
     ctx.clearRect(0, 0, overlay.width, overlay.height);
-    try { onFrame(v, ctx, now); } catch (e) { console.error(e); }
+    try { onFrame(now); } catch (e) { console.error(e); }
   }
   requestAnimationFrame(loop);
 }
 
+function setDots(on) {
+  showDots = on;
+  dotsBtn.setAttribute('aria-pressed', on);
+  dotsBtn.textContent = 'Face dots: ' + (on ? 'on' : 'off');
+  if (!on) ctx.clearRect(0, 0, overlay.width, overlay.height);
+}
+
+// ---------- Camera ----------
 async function start(deviceId) {
   if (stream) stream.getTracks().forEach(t => t.stop());
   try {
@@ -99,7 +121,13 @@ async function start(deviceId) {
     $('start').hidden = true;
     bar.hidden = false;
     await listCams();
-    if (!loop.started) { loop.started = true; await setupVision(); requestAnimationFrame(loop); }
+    if (!started) {
+      started = true;
+      requestAnimationFrame(loop);
+      setupVision()
+        .then(() => { dotsBtn.disabled = false; setDots(true); })
+        .catch(e => { console.error(e); dotsBtn.textContent = 'Face dots: failed'; });
+    }
   } catch (e) {
     $('msg').textContent = 'Camera error: ' + e.message + ' (page must be on https and camera allowed)';
   }
@@ -113,8 +141,10 @@ async function listCams() {
   cams.hidden = devices.length < 2;
 }
 
+// ---------- Controls ----------
 $('go').onclick = () => start();
 cams.onchange = () => start(cams.value);
+dotsBtn.onclick = () => setDots(!showDots);
 $('flip').onclick = () => document.body.classList.toggle('unmirrored');
 $('fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 $('snap').onclick = () => {
@@ -136,10 +166,13 @@ const wake = () => { bar.classList.remove('hide'); clearTimeout(t); t = setTimeo
 ['mousemove', 'touchstart', 'keydown'].forEach(e => addEventListener(e, wake));
 wake();
 
-// keyboard: F = fullscreen, M = flip
+// keyboard: D = dots, F = fullscreen, M = flip
 addEventListener('keydown', e => {
-  if (e.key === 'f') $('fs').click();
-  if (e.key === 'm') $('flip').click();
+  if (e.target.tagName === 'SELECT') return;
+  const k = e.key.toLowerCase();
+  if (k === 'd' && !dotsBtn.disabled) dotsBtn.click();
+  if (k === 'f') $('fs').click();
+  if (k === 'm') $('flip').click();
 });
 </script>
 </body>
